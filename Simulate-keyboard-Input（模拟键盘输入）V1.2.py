@@ -203,7 +203,7 @@ class KeyboardSimulator:
         self.button_start.config(state=NORMAL)  # 启用开始按钮
         self.button_stop.config(state=DISABLED)  # 禁用停止按钮
         self.progress['value'] = 0  # 重置进度条
-        messagebox.showinfo("完成", "模拟输入已完成。")
+        # messagebox.showinfo("完成", "模拟输入已完成。")
 
     def stop_simulation(self):
         self.stop_event.set()
