@@ -129,11 +129,11 @@ class KeyboardSimulator:
         style.theme_use('clam')  # 使用'clam'主题，其他主题如 'default', 'classic', 'alt'
 
         # 按钮样式
-        style.configure('TButton', font=('Helvetica', 10))
-        style.configure('TCheckbutton', font=('Helvetica', 10))
+        style.configure('TButton', font=('Microsoft YaHei', 10))
+        style.configure('TCheckbutton', font=('Microsoft YaHei', 10))
 
         # 标签样式
-        style.configure('TLabelframe.Label', font=('Helvetica', 12, 'bold'))
+        style.configure('TLabelframe.Label', font=('Microsoft YaHei', 12, 'bold'))
 
     def update_delay_label(self, event=None):
         self.delay_label.config(text=f"{self.delay_var.get():.2f} 秒")
