@@ -6,6 +6,8 @@ from tkinter import *
 from tkinter import scrolledtext, messagebox, filedialog, ttk
 from contextlib import contextmanager
 
+from pynput.keyboard import Controller, Key, KeyCode
+
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
@@ -555,7 +557,7 @@ class KeyboardSimulator:
 
     def release_hotkey_keys(self, keyboard, release_keys):
         for vk_code in reversed(release_keys):
-            keyboard.release_key(vk_code)
+            keyboard.release(KeyCode.from_vk(vk_code))
 
     def wait_with_stop(self, delay_seconds):
         if delay_seconds <= 0:
@@ -600,8 +602,8 @@ class KeyboardSimulator:
             self.finish_simulation()
             return
         
-        # 【核心改动】实例化我们自己的 SendInputController
-        keyboard = SendInputController()
+        # 回退到旧版 pynput 的实现，以支持中文
+        keyboard = Controller()
 
         start_delay = 0 if skip_start_delay else self.delay_var.get()
         char_delay = self.interval_var.get()
@@ -613,32 +615,34 @@ class KeyboardSimulator:
         newline_mode = self.newline_mode_var.get()
 
         def do_newline():
-            """
-            【核心改动】使用 SendInputController 的方法执行换行
-            """
             if newline_mode == "普通使用Enter换行":
-                keyboard.type_key(keyboard.VK_RETURN)
+                keyboard.press(Key.enter)
+                keyboard.release(Key.enter)
 
             elif newline_mode == "使用Shift+Enter换行":
-                # 使用上下文管理器，代码非常优雅
-                with keyboard.pressed(keyboard.VK_SHIFT):
-                    keyboard.type_key(keyboard.VK_RETURN)
+                with keyboard.pressed(Key.shift):
+                    keyboard.press(Key.enter)
+                    keyboard.release(Key.enter)
 
             elif newline_mode == "换行后10次Shift+Tab":
-                keyboard.type_key(keyboard.VK_RETURN)
+                keyboard.press(Key.enter)
+                keyboard.release(Key.enter)
                 time.sleep(char_delay)
                 for _ in range(10):
                     if self.stop_event.is_set(): break
-                    with keyboard.pressed(keyboard.VK_SHIFT):
-                        keyboard.type_key(keyboard.VK_TAB)
+                    with keyboard.pressed(Key.shift):
+                        keyboard.press(Key.tab)
+                        keyboard.release(Key.tab)
                     time.sleep(char_delay)
 
             elif newline_mode == "换行后2次Home回到行首":
-                keyboard.type_key(keyboard.VK_RETURN)
+                keyboard.press(Key.enter)
+                keyboard.release(Key.enter)
                 time.sleep(char_delay)
                 for _ in range(2):
                     if self.stop_event.is_set(): break
-                    keyboard.type_key(keyboard.VK_HOME)
+                    keyboard.press(Key.home)
+                    keyboard.release(Key.home)
                     time.sleep(char_delay)
 
         def simulate_input_thread():
@@ -657,8 +661,7 @@ class KeyboardSimulator:
                         if char == "\n":
                             do_newline()
                         else:
-                            # 【核心改动】使用 type_char 输入普通字符
-                            keyboard.type_char(char)
+                            keyboard.type(char)
 
                         self.window.after(0, self.progress.step, 1)
                         time.sleep(char_delay)
