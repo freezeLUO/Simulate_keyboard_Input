@@ -1,7 +1,10 @@
 import ctypes
 from ctypes import wintypes
+from pathlib import Path
+import tempfile
 import time
 import threading
+import traceback
 from tkinter import *
 from tkinter import scrolledtext, messagebox, filedialog, ttk
 from contextlib import contextmanager
@@ -377,7 +380,9 @@ class KeyboardSimulator:
         self.window.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.set_styles()
-        self.apply_hotkey(show_error=False)
+        # Let Tk render the window before registering a global hotkey. A conflicting
+        # hotkey must not prevent the application from becoming usable.
+        self.window.after_idle(self.apply_hotkey, None, False)
         
     def set_styles(self):
         style = ttk.Style()
@@ -720,11 +725,53 @@ class KeyboardSimulator:
                 messagebox.showerror("保存错误", f"无法保存文件：{e}")
 
 
-if __name__ == "__main__":
-    window = Tk()
-    window.title('模拟键盘输入 (SendInput底层版)')
-    window.geometry('700x600')
-    window.minsize(700, 600)
+def report_startup_error(error):
+    """Persist startup diagnostics and show them for windowed builds."""
+    log_path = Path(tempfile.gettempdir()) / "simulate_keyboard_input_startup.log"
+    details = traceback.format_exc()
+    try:
+        log_path.write_text(details, encoding="utf-8")
+    except OSError:
+        pass
 
-    app = KeyboardSimulator(window)
-    window.mainloop()
+    try:
+        messagebox.showerror(
+            "启动失败",
+            f"程序无法启动：{error}\n\n详细错误已保存到：\n{log_path}",
+        )
+    except Exception:
+        # A display error should never hide the original startup failure.
+        pass
+
+
+def run_application(
+    create_window=Tk,
+    create_app=KeyboardSimulator,
+    enter_mainloop=None,
+    report_error=None,
+):
+    """Create the GUI while keeping windowed-build failures observable."""
+    window = None
+    try:
+        window = create_window()
+        window.title("模拟键盘输入 (SendInput底层版)")
+        window.geometry("700x600")
+        window.minsize(700, 600)
+        create_app(window)
+        if enter_mainloop is None:
+            window.mainloop()
+        else:
+            enter_mainloop()
+    except Exception as error:
+        (report_error or report_startup_error)(error)
+        if window is not None:
+            try:
+                window.destroy()
+            except Exception:
+                pass
+        return False
+    return True
+
+
+if __name__ == "__main__":
+    run_application()
