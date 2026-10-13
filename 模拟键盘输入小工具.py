@@ -9,8 +9,6 @@ from tkinter import *
 from tkinter import scrolledtext, messagebox, filedialog, ttk
 from contextlib import contextmanager
 
-from pynput.keyboard import Controller, Key, KeyCode
-
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
@@ -62,10 +60,14 @@ class SendInputController:
         self.Input = Input
         self.KeyBdInput = KeyBdInput
         self.Input_I = Input_I  # 添加这一行，解决 'Input_I' 属性缺失问题
+        self._send_input_api = user32.SendInput
+        self._send_input_api.argtypes = (wintypes.UINT, ctypes.c_void_p, ctypes.c_int)
+        self._send_input_api.restype = wintypes.UINT
         
         # 定义键盘事件常量
         self.KEYEVENTF_KEYUP = 0x0002
         self.KEYEVENTF_SCANCODE = 0x0008
+        self.KEYEVENTF_UNICODE = 0x0004
         self.INPUT_KEYBOARD = 1
         
         # 虚拟键码 (Virtual-Key Codes)
@@ -109,18 +111,24 @@ class SendInputController:
             '`': (0xC0, False), '~': (0xC0, True),
         }
 
-    def _send_input_event(self, vk, flags):
+    def _send_input_event(self, vk, flags, scan=0):
         """底层的事件发送函数"""
-        scan_code = ctypes.windll.user32.MapVirtualKeyW(vk, 0)
-        # 如果使用 wScan, dwFlags 要包含 KEYEVENTF_SCANCODE
-        # ii = self.Input_I(ki=self.KeyBdInput(0, scan_code, flags | self.KEYEVENTF_SCANCODE, 0, self.PUL(0)))
-        
-        # 直接使用 wVk 更简单
-        # 修复类型错误：将整数0转换为c_ulong后再创建指针
+        if flags & self.KEYEVENTF_UNICODE:
+            vk_code = 0
+            scan_code = scan
+        else:
+            vk_code = vk
+            scan_code = 0
         extra = ctypes.c_ulong(0)
-        ii = self.Input_I(ki=self.KeyBdInput(vk, 0, flags, 0, ctypes.pointer(extra)))
+        ii = self.Input_I(
+            ki=self.KeyBdInput(vk_code, scan_code, flags, 0, ctypes.pointer(extra))
+        )
         x = self.Input(self.INPUT_KEYBOARD, ii)
-        ctypes.windll.user32.SendInput(1, ctypes.byref(x), ctypes.sizeof(x))
+        sent = self._send_input_api(1, ctypes.byref(x), ctypes.sizeof(x))
+        if sent != 1:
+            error = ctypes.get_last_error()
+            detail = ctypes.WinError(error) if error else "Windows rejected the input event"
+            raise RuntimeError(f"SendInput returned {sent}: {detail}")
 
     def press_key(self, vk_code):
         """按下指定的虚拟键"""
@@ -137,20 +145,15 @@ class SendInputController:
         self.release_key(vk_code)
 
     def type_char(self, char, delay=0.01):
-        """输入一个字符，能自动处理Shift键"""
-        if char in self.CHAR_MAP:
-            vk_code, needs_shift = self.CHAR_MAP[char]
-            if needs_shift:
-                self.press_key(self.VK_SHIFT)
-                time.sleep(delay)
-                self.type_key(vk_code, delay)
-                time.sleep(delay)
-                self.release_key(self.VK_SHIFT)
-            else:
-                self.type_key(vk_code, delay)
-        # 对于不在映射表中的特殊字符，可以添加更多处理逻辑
-        # else:
-        #     print(f"Warning: Character '{char}' not in map.")
+        """输入一个文本字符；统一使用Unicode事件，避免布局相关的虚拟键差异。"""
+        encoded = char.encode("utf-16-le", "surrogatepass")
+        for offset in range(0, len(encoded), 2):
+            code_unit = int.from_bytes(encoded[offset:offset + 2], "little")
+            self._send_input_event(0, self.KEYEVENTF_UNICODE, code_unit)
+            time.sleep(delay)
+            self._send_input_event(
+                0, self.KEYEVENTF_UNICODE | self.KEYEVENTF_KEYUP, code_unit
+            )
 
     @contextmanager
     def pressed(self, *vk_codes):
@@ -562,7 +565,7 @@ class KeyboardSimulator:
 
     def release_hotkey_keys(self, keyboard, release_keys):
         for vk_code in reversed(release_keys):
-            keyboard.release(KeyCode.from_vk(vk_code))
+            keyboard.release_key(vk_code)
 
     def wait_with_stop(self, delay_seconds):
         if delay_seconds <= 0:
@@ -607,8 +610,7 @@ class KeyboardSimulator:
             self.finish_simulation()
             return
         
-        # 回退到旧版 pynput 的实现，以支持中文
-        keyboard = Controller()
+        keyboard = SendInputController()
 
         start_delay = 0 if skip_start_delay else self.delay_var.get()
         char_delay = self.interval_var.get()
@@ -621,33 +623,27 @@ class KeyboardSimulator:
 
         def do_newline():
             if newline_mode == "普通使用Enter换行":
-                keyboard.press(Key.enter)
-                keyboard.release(Key.enter)
+                keyboard.type_key(keyboard.VK_RETURN, char_delay)
 
             elif newline_mode == "使用Shift+Enter换行":
-                with keyboard.pressed(Key.shift):
-                    keyboard.press(Key.enter)
-                    keyboard.release(Key.enter)
+                with keyboard.pressed(keyboard.VK_SHIFT):
+                    keyboard.type_key(keyboard.VK_RETURN, char_delay)
 
             elif newline_mode == "换行后10次Shift+Tab":
-                keyboard.press(Key.enter)
-                keyboard.release(Key.enter)
+                keyboard.type_key(keyboard.VK_RETURN, char_delay)
                 time.sleep(char_delay)
                 for _ in range(10):
                     if self.stop_event.is_set(): break
-                    with keyboard.pressed(Key.shift):
-                        keyboard.press(Key.tab)
-                        keyboard.release(Key.tab)
+                    with keyboard.pressed(keyboard.VK_SHIFT):
+                        keyboard.type_key(keyboard.VK_TAB, char_delay)
                     time.sleep(char_delay)
 
             elif newline_mode == "换行后2次Home回到行首":
-                keyboard.press(Key.enter)
-                keyboard.release(Key.enter)
+                keyboard.type_key(keyboard.VK_RETURN, char_delay)
                 time.sleep(char_delay)
                 for _ in range(2):
                     if self.stop_event.is_set(): break
-                    keyboard.press(Key.home)
-                    keyboard.release(Key.home)
+                    keyboard.type_key(keyboard.VK_HOME, char_delay)
                     time.sleep(char_delay)
 
         def simulate_input_thread():
@@ -666,7 +662,7 @@ class KeyboardSimulator:
                         if char == "\n":
                             do_newline()
                         else:
-                            keyboard.type(char)
+                            keyboard.type_char(char, char_delay)
 
                         self.window.after(0, self.progress.step, 1)
                         time.sleep(char_delay)
@@ -676,6 +672,8 @@ class KeyboardSimulator:
                         record_line = f"[{timestamp}] {text_content}"
                         self.records.append(record_line)
                         self.window.after(0, self.update_record_text, record_line)
+            except Exception as error:
+                self.window.after(0, self.report_input_error, error)
             finally:
                 if self.clear_text_var.get():
                     self.window.after(0, self.text.delete, '1.0', 'end')
@@ -689,6 +687,12 @@ class KeyboardSimulator:
         self.button_start.config(state=NORMAL)
         self.button_stop.config(state=DISABLED)
         self.progress['value'] = 0
+
+    def report_input_error(self, error):
+        messagebox.showerror(
+            "模拟输入失败",
+            f"Windows 拒绝了键盘事件：{error}\n\n请确认目标窗口已获得焦点，并检查程序与目标程序的权限级别。",
+        )
 
     def stop_simulation(self):
         if not self.simulation_active:
